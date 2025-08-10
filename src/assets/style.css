@@ -6,25 +6,7 @@
 
 body {
   font-family: 'Roboto', sans-serif;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   min-height: 100vh;
-}
-
-.home-background {
-  background: url('https://i.pinimg.com/736x/d8/a0/df/d8a0dfc5b6356039df4a6d00cbdf56f1.jpg') center/cover;
-  min-height: 100vh;
-  position: relative;
-}
-
-.home-background::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.3);
-  z-index: 1;
 }
 
 .home-content {
@@ -35,7 +17,7 @@ body {
 .timer-text {
   font-family: 'Courier New', monospace !important;
   font-weight: bold !important;
-  color: #1976d2 !important;
+  color:#ee9217  !important;
 }
 
 .navbar {
@@ -77,12 +59,12 @@ body {
 
 .status-active {
   background: #e8f5e8;
-  color: #2e7d32;
+  color: #036d80;
 }
 
 .status-finished {
   background: #e3f2fd;
-  color: #1976d2;
+  color: #ee9217;
 }
 
 /* Responsive Design */

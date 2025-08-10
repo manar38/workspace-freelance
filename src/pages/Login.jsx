@@ -21,7 +21,6 @@ const Login = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // If user is already logged in, redirect to appropriate page
     if (user) {
       if (isAdmin()) {
         navigate('/dashboard', { replace: true });
@@ -38,16 +37,15 @@ const Login = () => {
 
     try {
       await login(email, password);
-      // Navigation will be handled by useEffect
     } catch (error) {
-      setError('Invalid email or password');
+      setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Container maxWidth="sm">
+    <Container maxWidth="sm" dir="rtl">
       <Box
         sx={{
           display: 'flex',
@@ -59,12 +57,12 @@ const Login = () => {
       >
         <Paper elevation={3} sx={{ padding: 4, width: '100%' }}>
           <Typography variant="h4" component="h1" gutterBottom align="center">
-            Workspace Entry App
+            نظام تسجيل دخول المكتب
           </Typography>
           <Typography variant="h6" gutterBottom align="center" color="text.secondary">
-            Sign In
+            تسجيل الدخول
           </Typography>
-          
+
           {error && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {error}
@@ -77,7 +75,7 @@ const Login = () => {
               required
               fullWidth
               id="email"
-              label="Email Address"
+              label="البريد الإلكتروني"
               name="email"
               autoComplete="email"
               autoFocus
@@ -89,7 +87,7 @@ const Login = () => {
               required
               fullWidth
               name="password"
-              label="Password"
+              label="كلمة المرور"
               type="password"
               id="password"
               autoComplete="current-password"
@@ -103,20 +101,8 @@ const Login = () => {
               disabled={loading}
               sx={{ mt: 3, mb: 2 }}
             >
-              {loading ? <CircularProgress size={24} /> : 'Sign In'}
+              {loading ? <CircularProgress size={24} /> : 'تسجيل الدخول'}
             </Button>
-          </Box>
-
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="body2" color="text.secondary">
-              Demo Credentials:
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Admin: admin@demo.com / password
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              User: user@demo.com / password
-            </Typography>
           </Box>
         </Paper>
       </Box>

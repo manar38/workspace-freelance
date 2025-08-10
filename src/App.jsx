@@ -11,7 +11,7 @@ import Dashboard from './pages/Dashboard';
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#2196f3',
+      main: '#036d80',
     },
     secondary: {
       main: '#f50057',
