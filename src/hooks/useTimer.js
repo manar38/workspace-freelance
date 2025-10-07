@@ -9,7 +9,8 @@ export function useTimer(startTime, isActive = true) {
     const updateTimer = () => {
       const now = new Date()
       const start = new Date(startTime)
-      const diff = Math.floor((now - start) / 1000)
+      const diff = Math.max(0, Math.floor((now - start) / 1000));
+
       setSeconds(diff)
     }
 

@@ -4,10 +4,10 @@ import {
   Container, Paper, TextField, Button, Typography, Box, Alert,
   Grid, Card, CardContent, Dialog, DialogTitle,
   DialogContent, DialogActions, Tooltip,
-  Radio, RadioGroup, FormControlLabel, IconButton
+  Radio, RadioGroup, FormControlLabel, IconButton, Divider, List, ListItem, ListItemText, ListItemSecondaryAction
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { Person, Phone, LocationOn, School, Close } from '@mui/icons-material';
+import { Person, Phone, LocationOn, School, Close, Delete } from '@mui/icons-material';
 import { db } from '../utils/firebase';
 import {
   collection, addDoc, onSnapshot, updateDoc, doc, query, where, getDoc
@@ -15,8 +15,9 @@ import {
 import Timer from '../components/Timer';
 import Navbar from '../components/Navbar';
 import { jsPDF } from 'jspdf';
-import amiriFont from '../fonts/Amiri-Regular-normal.js'; // ملف الخط العربي
+import amiriFont from '../fonts/Amiri-Regular-normal.js';
 import TakeawayOrders from "./takeaway.jsx";
+
 // small helpers
 const safeNumber = (v) => {
   const n = Number(v);
@@ -40,25 +41,26 @@ const ceilHoursBetween = (startIso, endIso) => {
 
 const Home = () => {
   const [formData, setFormData] = useState({ fullName: '', phoneNumber: '', city: '', studyYear: '' });
-  const [sessionType, setSessionType] = useState('basic'); // basic = بدون مشروبات, drinks = مع مشروبات
+  const [sessionType, setSessionType] = useState('basic');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [activeSessions, setActiveSessions] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-
-  // Dialog للطلبات
   const [orderDialogOpen, setOrderDialogOpen] = useState(false);
   const [orderItem, setOrderItem] = useState('');
   const [orderPrice, setOrderPrice] = useState('');
 
-  // نحمّل الجلسات النشطة (realtime)
+  // تحميل الجلسات النشطة (realtime)
   useEffect(() => {
     const q = query(collection(db, 'sessions'), where('finished', '==', false));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const sessions = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
       setActiveSessions(sessions);
+    }, (err) => {
+      console.error('Error fetching sessions:', err);
+      setError('فشل تحميل الجلسات النشطة.');
     });
     return () => unsubscribe();
   }, []);
@@ -76,7 +78,7 @@ const Home = () => {
     try {
       const sessionData = {
         ...formData,
-        sessionType, // basic or drinks
+        sessionType,
         orders: [],
         startTime: new Date().toISOString(),
         finished: false,
@@ -94,8 +96,46 @@ const Home = () => {
     }
   };
 
-  const handleOpenDialog = (session) => {
-    setSelectedSession(session);
+  const handleOpenDialog = async (session) => {
+    if (!session) return;
+
+    let basicPrice = 0;
+    let drinksPrice = 0;
+    try {
+      const pricingRef = doc(db, 'settings', 'pricing');
+      const snap = await getDoc(pricingRef);
+      if (snap.exists()) {
+        const d = snap.data();
+        basicPrice = safeNumber(d.basicPrice);
+        drinksPrice = safeNumber(d.drinksPrice);
+      }
+    } catch (err) {
+      console.error('Error fetching pricing:', err);
+      setError('فشل جلب الأسعار، سيتم استخدام القيم الافتراضية.');
+    }
+
+    const now = new Date().toISOString();
+    const start = new Date(session.startTime);
+    const end = new Date(now);
+    const durationHoursDecimal = (end - start) / (1000 * 60 * 60);
+    const hoursRounded = ceilHoursBetween(session.startTime, now);
+    const pricePerHour = session.sessionType === 'drinks' ? drinksPrice : basicPrice;
+    const sessionCost = hoursRounded * pricePerHour;
+    const ordersTotal = (session.orders || []).reduce((sum, o) => sum + getOrderPrice(o), 0);
+    const totalCost = Math.round((sessionCost + ordersTotal) * 100) / 100;
+
+    setSelectedSession({
+      ...session,
+      _computed: {
+        endTime: now,
+        duration: durationHoursDecimal.toFixed(2),
+        hoursRounded,
+        pricePerHour,
+        sessionCost,
+        ordersTotal,
+        totalCost
+      }
+    });
     setDialogOpen(true);
   };
 
@@ -104,18 +144,15 @@ const Home = () => {
     setSelectedSession(null);
   };
 
-  // ======== تعديل هنا: حساب التكلفة مع استدعاء السعر من Firestore ========
   const handleFinishSession = async (sessionId, session) => {
-    // نأخذ وقت النهاية الآن
+    if (!session) return;
+    
     const endTime = new Date().toISOString();
     const start = new Date(session.startTime);
     const end = new Date(endTime);
+    const durationHoursDecimal = (end - start) / (1000 * 60 * 60);
+    const hoursRounded = ceilHoursBetween(session.startTime, endTime);
 
-    // مدة فعلية بالساعات (decimal) للتخزين والعرض التقريبي نستخدم ceilHoursBetween
-    const durationHoursDecimal = (end - start) / (1000 * 60 * 60); // ممكن تكون 0.01 ...
-    const hoursRounded = ceilHoursBetween(session.startTime, endTime); // نقرب لأعلى ساعة
-
-    // نجلب أسعار الساعات من Firestore settings/pricing
     let basicPrice = 0;
     let drinksPrice = 0;
     try {
@@ -131,35 +168,26 @@ const Home = () => {
     }
 
     const pricePerHour = session.sessionType === 'drinks' ? drinksPrice : basicPrice;
-
-    // مجموع الطلبات الآن
     const totalOrders = (session.orders || []).reduce((sum, o) => sum + getOrderPrice(o), 0);
-
-    // تكلفة الجلسة = ساعات مقربة × سعر الساعة
     const sessionCost = hoursRounded * pricePerHour;
-
-    // الكل
     const totalCost = Math.round((sessionCost + totalOrders) * 100) / 100;
 
-    // نحدّث المستند في Firestore ونخزن الحقول المحسوبة
     try {
       await updateDoc(doc(db, 'sessions', sessionId), {
         endTime,
         finished: true,
-        // duration نحتفظ بالمدة الفعلية بشكل عشري (ساعات) للتاريخ/عرض دقيق
         duration: durationHoursDecimal.toFixed(2),
-        hoursRounded, // الساعات المقربة
-        pricePerHour, // السعر المستخدم
-        sessionCost, // تكلفة الجلسة (ساعات × سعر)
+        hoursRounded,
+        pricePerHour,
+        sessionCost,
         ordersTotal: totalOrders,
-        totalCost // المبلغ الإجمالي (جلسة + طلبات)
+        totalCost
       });
     } catch (err) {
       console.error('Error updating finished session:', err);
       throw err;
     }
 
-    // نعيد البيانات لاستخدامها فورًا (مثلاً للطباعة)
     return {
       endTime,
       duration: durationHoursDecimal.toFixed(2),
@@ -172,8 +200,9 @@ const Home = () => {
   };
 
   const handleFinishOnly = async () => {
+    if (!selectedSession) return;
     try {
-      const result = await handleFinishSession(selectedSession.id, selectedSession);
+      await handleFinishSession(selectedSession.id, selectedSession);
       setSuccess('تم إنهاء الجلسة بنجاح!');
       handleCloseDialog();
     } catch (err) {
@@ -182,9 +211,9 @@ const Home = () => {
   };
 
   const handleFinishAndPrint = async () => {
+    if (!selectedSession) return;
     try {
       const result = await handleFinishSession(selectedSession.id, selectedSession);
-      // نمرّر التقرير بيانات الجلسة + القيم المحسوبة
       generateReport({ ...selectedSession, ...result });
       setSuccess('تم إنهاء الجلسة وطباعة التقرير بنجاح!');
       handleCloseDialog();
@@ -193,11 +222,8 @@ const Home = () => {
     }
   };
 
-  // ======== تعديل هنا: generateReport بصيغة مرتبة ومتكاملة ========
   const generateReport = (session) => {
     const docPdf = new jsPDF();
-
-    // إضافة الخط العربي (Amiri)
     try {
       docPdf.addFileToVFS("Amiri-Regular.ttf", amiriFont);
       docPdf.addFont("Amiri-Regular.ttf", "Amiri", "normal");
@@ -212,10 +238,7 @@ const Home = () => {
     docPdf.setFontSize(12);
     let y = 38;
 
-    // نوع الجلسة
-    const typeLabel = session.sessionType === 'drinks' ? "مع مشروبات" : "مذاكرة فقط";
-
-    // بيانات أساسية
+    const typeLabel = session.sessionType === 'drinks' ? "مع مشروبات" : session.sessionType === 'take away' ? "تيك أواي" : "مذاكرة فقط";
     const details = [
       ["الاسم:", session.fullName || "—"],
       ["الهاتف:", session.phoneNumber || "—"],
@@ -233,7 +256,6 @@ const Home = () => {
     docPdf.text("المشروبات / الطلبات:", 190, y, { align: "right" });
     y += 8;
 
-    // عرض الطلبات (كل صنف سطر)
     if (session.orders && session.orders.length > 0) {
       session.orders.forEach((o) => {
         const name = getOrderName(o) || "غير معروف";
@@ -248,15 +270,13 @@ const Home = () => {
 
     y += 4;
 
-    // توقيتات و حسابات
     const start = new Date(session.startTime);
     const end = session.endTime ? new Date(session.endTime) : new Date();
     const hoursRounded = session.hoursRounded ?? ceilHoursBetween(session.startTime, session.endTime || new Date().toISOString());
-    // pricePerHour قد تم تسجيله عند إنهاء الجلسة، وإلا نحاول جلبه صفر افتراضي
-    const pricePerHour = typeof session.pricePerHour !== 'undefined' ? safeNumber(session.pricePerHour) : 0;
-    const sessionCost = typeof session.sessionCost !== 'undefined' ? safeNumber(session.sessionCost) : hoursRounded * pricePerHour;
-    const ordersTotal = typeof session.ordersTotal !== 'undefined' ? safeNumber(session.ordersTotal) : (session.orders || []).reduce((s,o)=> s + getOrderPrice(o), 0);
-    const totalCost = typeof session.totalCost !== 'undefined' ? safeNumber(session.totalCost) : Math.round((sessionCost + ordersTotal)*100)/100;
+    const pricePerHour = safeNumber(session.pricePerHour) || 0;
+    const sessionCost = safeNumber(session.sessionCost) || hoursRounded * pricePerHour;
+    const ordersTotal = safeNumber(session.ordersTotal) || (session.orders || []).reduce((s, o) => s + getOrderPrice(o), 0);
+    const totalCost = safeNumber(session.totalCost) || Math.round((sessionCost + ordersTotal) * 100) / 100;
 
     const times = [
       ["البداية:", start.toLocaleString()],
@@ -274,27 +294,65 @@ const Home = () => {
       y += 8;
     });
 
-    // حفظ الملف
-    const filename = `تقرير_${session.fullName || 'session'}.pdf`;
+    const filename = `تقرير_${session.fullName || 'session'}_${Date.now()}.pdf`;
     docPdf.save(filename);
   };
 
-  // إضافة طلب جديد (داخل الـ Dialog)
+  // إضافة طلب جديد
   const handleAddOrder = async () => {
-    if (!orderItem || !orderPrice) return;
+    if (!orderItem || !orderPrice || isNaN(orderPrice) || Number(orderPrice) <= 0) {
+      setError('يرجى إدخال اسم الصنف وسعر صحيح.');
+      return;
+    }
     const newOrder = { item: orderItem, price: Number(orderPrice) };
-    const updatedOrders = [...(selectedSession.orders || []), newOrder];
+    const updatedOrders = [...(selectedSession?.orders || []), newOrder];
 
     try {
       await updateDoc(doc(db, 'sessions', selectedSession.id), {
         orders: updatedOrders
       });
-      // نحدّث الـ local selectedSession للعرض فوراً
       setSelectedSession({ ...selectedSession, orders: updatedOrders });
       setOrderItem('');
       setOrderPrice('');
+      setSuccess('تم إضافة الطلب بنجاح!');
     } catch (err) {
       console.error('Error adding order:', err);
+      setError('فشل إضافة الطلب، حاول مرة أخرى.');
+    }
+  };
+
+  // تعديل طلب موجود
+  const handleEditOrder = async (index, field, value) => {
+    if (!selectedSession) return;
+    const updatedOrders = [...selectedSession.orders];
+    const existing = updatedOrders[index] || {};
+    updatedOrders[index] = { ...existing, [field]: field === 'price' ? Number(value) : value };
+    
+    try {
+      await updateDoc(doc(db, 'sessions', selectedSession.id), {
+        orders: updatedOrders
+      });
+      setSelectedSession({ ...selectedSession, orders: updatedOrders });
+      setSuccess('تم تعديل الطلب بنجاح!');
+    } catch (err) {
+      console.error('Error editing order:', err);
+      setError('فشل تعديل الطلب، حاول مرة أخرى.');
+    }
+  };
+
+  // حذف طلب
+  const handleDeleteOrder = async (index) => {
+    if (!selectedSession) return;
+    const updatedOrders = selectedSession.orders.filter((_, i) => i !== index);
+    try {
+      await updateDoc(doc(db, 'sessions', selectedSession.id), {
+        orders: updatedOrders
+      });
+      setSelectedSession({ ...selectedSession, orders: updatedOrders });
+      setSuccess('تم حذف الطلب بنجاح!');
+    } catch (err) {
+      console.error('Error deleting order:', err);
+      setError('فشل حذف الطلب، حاول مرة أخرى.');
     }
   };
 
@@ -329,6 +387,8 @@ const Home = () => {
             onClick={() => {
               setSelectedSession(params.row);
               setOrderDialogOpen(true);
+              setError('');
+              setSuccess('');
             }}
             disabled={params.row.finished}
           >
@@ -394,44 +454,68 @@ const Home = () => {
                 </Card>
               </Grid>
 
-              <Grid item xs={12}  md={12}>
+              <Grid item xs={12} md={12}>
                 <TakeawayOrders />
               </Grid>
             </Grid>
-
-           
           </Grid>
-           <Grid item xs={12}>
-              <Paper elevation={3} sx={{ p: 3 }}>
-                <Typography variant="h6" gutterBottom>الجلسات الحالية</Typography>
-                <Box sx={{ height: 400, width: '100%' }}>
-                  <DataGrid
-                    rows={activeSessions}
-                    columns={columns}
-                    pageSize={5}
-                    rowsPerPageOptions={[5, 10, 20]}
-                    disableSelectionOnClick
-                  />
-                </Box>
-              </Paper>
-            </Grid>
+          
+          <Grid item xs={12}>
+            <Paper elevation={3} sx={{ p: 3 }}>
+              <Typography variant="h6" gutterBottom>الجلسات الحالية</Typography>
+              <Box sx={{ height: 400, width: '100%' }}>
+                <DataGrid
+                  rows={activeSessions}
+                  columns={columns}
+                  pageSize={5}
+                  rowsPerPageOptions={[5, 10, 20]}
+                  disableSelectionOnClick
+                />
+              </Box>
+            </Paper>
+          </Grid>
         </Grid>
       </Container>
-      
 
       {/* Dialog إنهاء الجلسة */}
-      <Dialog open={dialogOpen} onClose={handleCloseDialog}>
-        <DialogTitle>هل تريد إنهاء الجلسة؟</DialogTitle>
-        <DialogContent>
-          <Typography>اختر طريقة الإنهاء المطلوبة:</Typography>
+      <Dialog open={dialogOpen} onClose={handleCloseDialog} fullWidth maxWidth="sm">
+        <DialogTitle>
+          هل تريد إنهاء الجلسة؟
+          <IconButton aria-label="close" onClick={handleCloseDialog} sx={{ position: 'absolute', left: 8, top: 8 }}>
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography>تقرير الجلسة (بناءً على الوقت الحالي):</Typography>
+          {selectedSession && selectedSession._computed ? (
+            <Box>
+              <Typography>الاسم: {selectedSession.fullName || '—'}</Typography>
+              <Typography>الهاتف: {selectedSession.phoneNumber || '—'}</Typography>
+              <Typography>المدينة: {selectedSession.city || '—'}</Typography>
+              <Typography>الصف: {selectedSession.studyYear || '—'}</Typography>
+              <Typography>النوع: {selectedSession.sessionType === 'drinks' ? 'مع مشروبات' : selectedSession.sessionType === 'take away' ? 'تيك أواي' : 'بدون مشروبات'}</Typography>
+              <Divider sx={{ my: 1 }} />
+              <Typography>الطلبات: {(selectedSession.orders || []).map(o => `${getOrderName(o)} (${getOrderPrice(o)}ج)`).join(', ') || '—'}</Typography>
+              <Typography>وقت البداية: {new Date(selectedSession.startTime).toLocaleString()}</Typography>
+              <Typography>وقت النهاية المقترح: {selectedSession._computed.endTime ? new Date(selectedSession._computed.endTime).toLocaleString() : '—'}</Typography>
+              <Typography>المدة (مقربة): {selectedSession._computed.hoursRounded} ساعة</Typography>
+              <Typography>سعر الساعة: {selectedSession._computed.pricePerHour.toFixed(2)} ج</Typography>
+              <Typography>تكلفة الجلسة: {selectedSession._computed.sessionCost.toFixed(2)} ج</Typography>
+              <Typography>تكلفة الطلبات: {selectedSession._computed.ordersTotal.toFixed(2)} ج</Typography>
+              <Divider sx={{ my: 1 }} />
+              <Typography variant="h6">إجمالي: {selectedSession._computed.totalCost.toFixed(2)} ج</Typography>
+            </Box>
+          ) : (
+            <Typography color="error">خطأ: لا توجد بيانات للجلسة</Typography>
+          )}
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', p: 2 }}>
-          <Button onClick={handleFinishOnly} color="error">إنهاء فقط</Button>
-          <Button onClick={handleFinishAndPrint} variant="contained" color="primary">إنهاء وطباعة التقرير</Button>
+          <Button onClick={handleFinishOnly} color="error" disabled={!selectedSession}>إنهاء فقط</Button>
+          <Button onClick={handleFinishAndPrint} variant="contained" color="primary" disabled={!selectedSession}>إنهاء وطباعة التقرير</Button>
         </DialogActions>
       </Dialog>
 
-      {/* Dialog الطلبات */}
+      {/* Dialog إدارة الطلبات */}
       <Dialog open={orderDialogOpen} onClose={() => setOrderDialogOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>
           إدارة الطلبات
@@ -439,78 +523,82 @@ const Home = () => {
             <Close />
           </IconButton>
         </DialogTitle>
-        <DialogContent>
-          {/* إضافة طلب جديد */}
+        <DialogContent dividers>
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
+          <Typography variant="subtitle1" gutterBottom>إضافة طلب جديد</Typography>
           <TextField
             fullWidth
-            label="الصنف"
+            label="اسم الصنف"
             value={orderItem}
             onChange={(e) => setOrderItem(e.target.value)}
             margin="normal"
+            required
           />
           <TextField
             fullWidth
-            label="السعر"
+            label="السعر (ج.م)"
             type="number"
             value={orderPrice}
             onChange={(e) => setOrderPrice(e.target.value)}
             margin="normal"
+            required
+            inputProps={{ min: 0, step: 0.01 }}
           />
-          <Button onClick={handleAddOrder} variant="contained" sx={{ mt: 2 }}>إضافة</Button>
+          <Button
+            onClick={handleAddOrder}
+            variant="contained"
+            color="primary"
+            sx={{ mt: 2, mb: 3 }}
+            disabled={!orderItem || !orderPrice || isNaN(orderPrice) || Number(orderPrice) <= 0}
+          >
+            إضافة الطلب
+          </Button>
 
-          {/* عرض الطلبات الحالية */}
-          <Typography sx={{ mt: 3, mb: 1 }}>الطلبات الحالية:</Typography>
+          <Divider />
+          <Typography variant="subtitle1" gutterBottom sx={{ mt: 2 }}>الطلبات الحالية</Typography>
           {selectedSession?.orders?.length > 0 ? (
-            selectedSession.orders.map((o, idx) => (
-              <Box key={idx} sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <TextField
-                  value={getOrderName(o)}
-                  onChange={(e) => {
-                    // نسمح بتعديل الحقل item (نحافظ على شكل object)
-                    const updated = [...selectedSession.orders];
-                    const existing = updated[idx] || {};
-                    updated[idx] = { ...(typeof existing === 'string' ? { item: existing } : existing), item: e.target.value };
-                    setSelectedSession({ ...selectedSession, orders: updated });
-                  }}
-                  sx={{ mr: 1 }}
-                />
-                <TextField
-                  type="number"
-                  value={getOrderPrice(o)}
-                  onChange={(e) => {
-                    const updated = [...selectedSession.orders];
-                    const existing = updated[idx] || {};
-                    updated[idx] = { ...(typeof existing === 'string' ? { item: existing } : existing), price: Number(e.target.value) };
-                    setSelectedSession({ ...selectedSession, orders: updated });
-                  }}
-                  sx={{ mr: 1, width: 100 }}
-                />
-                
-                <Button
-                  color="error"
-                  variant="outlined"
-                  onClick={async () => {
-                    const updated = selectedSession.orders.filter((_, i) => i !== idx);
-                    try {
-                      await updateDoc(doc(db, 'sessions', selectedSession.id), {
-                        orders: updated
-                      });
-                      setSelectedSession({ ...selectedSession, orders: updated });
-                    } catch (err) {
-                      console.error('Error deleting order:', err);
+            <List dense>
+              {selectedSession.orders.map((order, index) => (
+                <ListItem key={index} divider>
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <TextField
+                          value={getOrderName(order)}
+                          onChange={(e) => handleEditOrder(index, 'item', e.target.value)}
+                          size="small"
+                          sx={{ mr: 2, width: '60%' }}
+                        />
+                        <TextField
+                          type="number"
+                          value={getOrderPrice(order)}
+                          onChange={(e) => handleEditOrder(index, 'price', e.target.value)}
+                          size="small"
+                          sx={{ width: '30%' }}
+                          inputProps={{ min: 0, step: 0.01 }}
+                        />
+                      </Box>
                     }
-                  }}
-                >
-                  حذف
-                </Button>
-              </Box>
-            ))
+                  />
+                  <ListItemSecondaryAction>
+                    <IconButton
+                      edge="end"
+                      aria-label="delete"
+                      onClick={() => handleDeleteOrder(index)}
+                    >
+                      <Delete color="error" />
+                    </IconButton>
+                  </ListItemSecondaryAction>
+                </ListItem>
+              ))}
+            </List>
           ) : (
             <Typography color="text.secondary">لا يوجد طلبات بعد</Typography>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOrderDialogOpen(false)}>إغلاق</Button>
+          <Button onClick={() => setOrderDialogOpen(false)} color="primary">إغلاق</Button>
         </DialogActions>
       </Dialog>
     </Box>

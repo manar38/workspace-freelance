@@ -3,17 +3,18 @@ import React, { useEffect, useState } from "react";
 import {
   Container, Box, Typography, Paper, Grid, Card, CardContent,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Chip, TextField, InputAdornment, Alert, Tooltip,
-  Button, Dialog, DialogTitle, DialogContent, IconButton, Divider
+  Chip, Alert, Tooltip,
+  Button, Dialog, DialogTitle, DialogContent, IconButton, Divider, DialogActions,
+  TextField
 } from "@mui/material";
 import {
   Dashboard as DashboardIcon,
   People, Schedule, AttachMoney, AccessTime,
-  Search, CheckCircle, PendingActions, LocalCafe, Visibility, Close
+  CheckCircle, PendingActions, LocalCafe, Visibility, Close, Delete
 } from "@mui/icons-material";
 import {
   collection, onSnapshot, query, orderBy,
-  doc, getDoc, setDoc
+  doc, getDoc, setDoc, deleteDoc
 } from "firebase/firestore";
 import { db } from "../utils/firebase";
 import Navbar from "../components/Navbar";
@@ -36,7 +37,8 @@ const ceilHoursBetween = (start, end) => {
 };
 
 const formatHMS = (start, end) => {
-  const diff = (new Date(end) - new Date(start)) / 1000;
+  const diff = Math.max(0, Math.floor((now - start) / 1000));
+
   if (!Number.isFinite(diff) || diff <= 0) return "00:00:00";
   const h = Math.floor(diff / 3600);
   const m = Math.floor((diff % 3600) / 60);
@@ -59,10 +61,6 @@ const getOrderPrice = (o) => {
 
 const Dashboard = () => {
   const [sessions, setSessions] = useState([]);
-  const [filteredSessions, setFilteredSessions] = useState([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -71,6 +69,9 @@ const Dashboard = () => {
 
   const [openReport, setOpenReport] = useState(false);
   const [selectedSession, setSelectedSession] = useState(null);
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState(null);
 
   // ✅ تحميل الجلسات
   useEffect(() => {
@@ -87,7 +88,6 @@ const Dashboard = () => {
           };
         });
         setSessions(data);
-        setFilteredSessions(data);
         setLoading(false);
       } catch (err) {
         console.error("sessions snapshot error:", err);
@@ -121,82 +121,58 @@ const Dashboard = () => {
     fetchPricing();
   }, []);
 
-  const updatePricing = async (field, value) => {
+  // ✅ حفظ الأسعار
+  const savePricing = async () => {
     try {
-      const pricingRef = doc(db, "settings", "pricing");
-      await setDoc(pricingRef, {
-        basicPrice: safeNumber(field === "basicPrice" ? value : basicPrice),
-        drinksPrice: safeNumber(field === "drinksPrice" ? value : drinksPrice),
+      await setDoc(doc(db, "settings", "pricing"), {
+        basicPrice: safeNumber(basicPrice),
+        drinksPrice: safeNumber(drinksPrice),
       });
+      alert("✅ تم حفظ أسعار الساعة بنجاح");
     } catch (err) {
-      console.error("updatePricing error:", err);
+      console.error("savePricing error:", err);
+      alert("⚠️ حدث خطأ أثناء حفظ الأسعار");
     }
   };
 
-  // ✅ فلترة
-  useEffect(() => {
-    const filtered = sessions.filter((session) => {
-      const matchText =
-        (session.fullName || "")
-          .toLowerCase()
-          .includes(searchQuery.toLowerCase()) ||
-        (session.city || "").toLowerCase().includes(searchQuery.toLowerCase());
-
-      const sessionDate = new Date(session.startTime);
-      const isAfterStart = fromDate ? sessionDate >= new Date(fromDate) : true;
-      const isBeforeEnd = toDate
-        ? sessionDate <= new Date(toDate + "T23:59")
-        : true;
-
-      return matchText && isAfterStart && isBeforeEnd;
-    });
-    setFilteredSessions(filtered);
-  }, [searchQuery, fromDate, toDate, sessions]);
-
   // ✅ حساب الإحصائيات
   const calculateMetrics = () => {
-    const startFilter = fromDate ? new Date(fromDate) : null;
-    const endFilter = toDate ? new Date(toDate + "T23:59") : null;
-
-    const filteredByDate = sessions.filter((s) => {
-      const d = new Date(s.startTime);
-      const afterStart = startFilter ? d >= startFilter : true;
-      const beforeEnd = endFilter ? d <= endFilter : true;
-      return afterStart && beforeEnd;
-    });
-
-    const active = filteredByDate.filter((s) => !s.finished);
-
-    const totalHours = filteredByDate.reduce((sum, s) => {
+    const totalHours = sessions.reduce((sum, s) => {
       if (s.finished && s.endTime && s.sessionType !== "take away") {
-        return sum + ceilHoursBetween(s.startTime, s.endTime);
+        // استخدم hoursRounded إذا موجود، وإلا احسب
+        return sum + (s.hoursRounded || ceilHoursBetween(s.startTime, s.endTime));
       }
       return sum;
     }, 0);
 
-    const totalRevenue = filteredByDate.reduce((sum, s) => {
+    const totalRevenue = sessions.reduce((sum, s) => {
       if (s.finished && s.endTime) {
-        let pricePerHour = 0;
-        if (s.sessionType === "drinks") pricePerHour = drinksPrice;
-        else if (s.sessionType === "basic") pricePerHour = basicPrice;
-        else if (s.sessionType === "take away") pricePerHour = 0;
+        // استخدم totalCost إذا موجود، وإلا احسب كما قبل
+        if (typeof s.totalCost !== 'undefined') {
+          return sum + safeNumber(s.totalCost);
+        } else {
+          let pricePerHour = 0;
+          if (s.sessionType === "drinks") pricePerHour = drinksPrice;
+          else if (s.sessionType === "basic") pricePerHour = basicPrice;
+          else if (s.sessionType === "take away") pricePerHour = 0;
 
-        const hours =
-          s.sessionType === "take away"
-            ? 0
-            : ceilHoursBetween(s.startTime, s.endTime);
-        const ordersTotal = (s.orders || []).reduce(
-          (acc, o) => acc + getOrderPrice(o),
-          0
-        );
-        return sum + hours * pricePerHour + ordersTotal;
+          const hours =
+            s.sessionType === "take away"
+              ? 0
+              : ceilHoursBetween(s.startTime, s.endTime);
+          const ordersTotal = (s.orders || []).reduce(
+            (acc, o) => acc + getOrderPrice(o),
+            0
+          );
+          return sum + hours * pricePerHour + ordersTotal;
+        }
       }
       return sum;
     }, 0);
 
     return {
-      activeSessions: active.length,
-      totalSessions: filteredByDate.length,
+      activeSessions: sessions.filter((s) => !s.finished).length,
+      totalSessions: sessions.length,
       monthlyHours: totalHours,
       monthlyRevenue: totalRevenue,
     };
@@ -221,22 +197,10 @@ const Dashboard = () => {
   const openSessionReport = (session) => {
     const start = new Date(session.startTime);
     const end = session.endTime ? new Date(session.endTime) : new Date();
-    const durationHours =
-      session.sessionType === "take away"
-        ? 0
-        : ceilHoursBetween(start, end);
-    const pricePerHour =
-      session.sessionType === "drinks"
-        ? drinksPrice
-        : session.sessionType === "take away"
-        ? 0
-        : basicPrice;
-
-    const ordersTotal = (session.orders || []).reduce(
-      (acc, o) => acc + getOrderPrice(o),
-      0
-    );
-    const cost = durationHours * pricePerHour + ordersTotal;
+    const durationHours = session.sessionType === "take away" ? 0 : (session.hoursRounded || ceilHoursBetween(start, end));
+    const pricePerHour = safeNumber(session.pricePerHour) || (session.sessionType === "drinks" ? drinksPrice : (session.sessionType === "take away" ? 0 : basicPrice));
+    const ordersTotal = safeNumber(session.ordersTotal) || (session.orders || []).reduce((acc, o) => acc + getOrderPrice(o), 0);
+    const cost = safeNumber(session.totalCost) || (durationHours * pricePerHour + ordersTotal);
 
     setSelectedSession({
       ...session,
@@ -250,7 +214,24 @@ const Dashboard = () => {
     setOpenReport(false);
   };
 
-  // ✅ render
+  // ✅ فتح Dialog الحذف
+  const confirmDeleteSession = (session) => {
+    setSessionToDelete(session);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteSession = async () => {
+    if (!sessionToDelete) return;
+    try {
+      await deleteDoc(doc(db, "sessions", sessionToDelete.id));
+      setDeleteDialogOpen(false);
+      setSessionToDelete(null);
+    } catch (err) {
+      console.error("deleteSession error:", err);
+      alert("حدث خطأ أثناء حذف الجلسة");
+    }
+  };
+
   return (
     <Box>
       <Navbar />
@@ -261,241 +242,216 @@ const Dashboard = () => {
 
         {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
 
-        {/* Cards */}
-        <Grid container spacing={3} alignItems="stretch" mb={4}>
-          {[
-            { icon: <PendingActions />, label: "الجلسات النشطة", value: metrics.activeSessions },
-            { icon: <People />, label: "إجمالي الجلسات", value: metrics.totalSessions },
-            { icon: <AccessTime />, label: "ساعات (مقربة)", value: metrics.monthlyHours.toFixed(0) },
-            { icon: <AttachMoney />, label: "إيرادات الفترة", value: formatCurrency(metrics.monthlyRevenue) },
-          ].map((item, idx) => (
-            <Grid item xs={12} sm={6} md={3} key={idx}>
-              <Card sx={{ height: "100%" }}>
-                <CardContent>
-                  <Box display="flex" alignItems="center" gap={2}>
-                    {React.cloneElement(item.icon, {
-                      sx: { fontSize: 40, color: "primary.main" },
-                    })}
-                    <Box>
-                      <Typography variant="h4">{item.value}</Typography>
-                      <Typography color="text.secondary">{item.label}</Typography>
-                    </Box>
-                  </Box>
-                </CardContent>
-              </Card>
+        {/* 🔹 حقول إدخال أسعار الساعة */}
+        <Paper sx={{ p: 3, mb: 3 }}>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} sm={4}>
+              <TextField
+                label="سعر الساعة بدون مشروبات"
+                type="number"
+                fullWidth
+                value={basicPrice}
+                onChange={(e) => setBasicPrice(e.target.value)}
+              />
             </Grid>
-          ))}
+            <Grid item xs={12} sm={4}>
+              <TextField
+                label="سعر الساعة مع مشروبات"
+                type="number"
+                fullWidth
+                value={drinksPrice}
+                onChange={(e) => setDrinksPrice(e.target.value)}
+              />
+            </Grid>
+            <Grid item xs={12} sm={4}>
+              <Button
+                variant="contained"
+                color="primary"
+                fullWidth
+                sx={{ height: "100%" }}
+                onClick={savePricing}
+              >
+                حفظ الأسعار
+              </Button>
+            </Grid>
+          </Grid>
+        </Paper>
+
+        {/* 🔹 الكروت الخاصة بالإحصائيات */}
+        <Grid container spacing={2} mb={3}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6">الجلسات النشطة</Typography>
+                <Typography variant="h4">{metrics.activeSessions}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6">إجمالي الجلسات</Typography>
+                <Typography variant="h4">{metrics.totalSessions}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6">إجمالي الساعات</Typography>
+                <Typography variant="h4">{metrics.monthlyHours}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6">إجمالي الإيراد</Typography>
+                <Typography variant="h4">{formatCurrency(metrics.monthlyRevenue)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
         </Grid>
 
-        {/* Sessions Table */}
-        <Paper>
-          <Box p={3}>
-            <Typography variant="h6" mb={2}>كل الجلسات</Typography>
-            <TableContainer>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>الاسم</TableCell>
-                    <TableCell>الهاتف</TableCell>
-                    <TableCell>المدينة</TableCell>
-                    <TableCell>الصف</TableCell>
-                    <TableCell>نوع الجلسة</TableCell>
-                    <TableCell>المشروبات</TableCell>
-                    <TableCell>البداية</TableCell>
-                    <TableCell>المدة</TableCell>
-                    <TableCell>التكلفة</TableCell>
-                    <TableCell>الحالة</TableCell>
-                    <TableCell>عرض التقرير</TableCell>
-                  </TableRow>
-                </TableHead>
+        {/* 🔹 جدول الجلسات (زي القديم) */}
+        <TableContainer component={Paper}>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>الاسم</TableCell>
+                <TableCell>الهاتف</TableCell>
+                <TableCell>المدينة</TableCell>
+                <TableCell>الصف</TableCell>
+                <TableCell>نوع الجلسة</TableCell>
+                <TableCell>المشروبات</TableCell>
+                <TableCell>البداية</TableCell>
+                <TableCell>المدة</TableCell>
+                <TableCell>التكلفة</TableCell>
+                <TableCell>الحالة</TableCell>
+                <TableCell>إجراءات</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {sessions.map((s) => {
+                const start = new Date(s.startTime);
+                const end = s.endTime ? new Date(s.endTime) : new Date();
+                const durationHours = s.sessionType === "take away" ? 0 : (s.hoursRounded || ceilHoursBetween(start, end));
+                const pricePerHour = safeNumber(s.pricePerHour) || (s.sessionType === "drinks" ? drinksPrice : (s.sessionType === "take away" ? 0 : basicPrice));
+                const ordersTotal = safeNumber(s.ordersTotal) || (s.orders || []).reduce((acc, o) => acc + getOrderPrice(o), 0);
+                const cost = safeNumber(s.totalCost) || (durationHours * pricePerHour + ordersTotal);
 
-                <TableBody>
-                  {filteredSessions.map((session) => {
-                    const start = new Date(session.startTime);
-                    const end = session.endTime ? new Date(session.endTime) : new Date();
-                    const durationHours =
-                      session.sessionType === "take away"
-                        ? 0
-                        : ceilHoursBetween(start, end);
-
-                    const pricePerHour =
-                      session.sessionType === "drinks"
-                        ? drinksPrice
-                        : session.sessionType === "take away"
-                        ? 0
-                        : basicPrice;
-
-                    const ordersTotal = (session.orders || []).reduce(
-                      (acc, o) => acc + getOrderPrice(o),
-                      0
-                    );
-                    const cost = durationHours * pricePerHour + ordersTotal;
-
-                    return (
-                      <TableRow key={session.id}>
-                        <TableCell>{session.fullName}</TableCell>
-                        <TableCell>{session.phoneNumber}</TableCell>
-                        <TableCell>{session.city}</TableCell>
-                        <TableCell>{session.studyYear}</TableCell>
-
-                        <TableCell>
-                          <Tooltip
-                            title={
-                              session.sessionType === "drinks"
-                                ? "بمشروبات"
-                                : session.sessionType === "take away"
-                                ? "تيك أواي"
-                                : "بدون مشروبات"
-                            }
-                          >
-                            <Chip
-                              label={
-                                session.sessionType === "drinks"
-                                  ? "مع مشروبات"
-                                  : session.sessionType === "take away"
-                                  ? "تيك أواي"
-                                  : "مذاكرة فقط"
-                              }
-                              color={
-                                session.sessionType === "drinks"
-                                  ? "secondary"
-                                  : session.sessionType === "take away"
-                                  ? "success"
-                                  : "default"
-                              }
-                              icon={<LocalCafe />}
-                              size="small"
-                            />
-                          </Tooltip>
-                        </TableCell>
-
-                        <TableCell>{renderOrdersInline(session.orders)}</TableCell>
-                        <TableCell>{new Date(session.startTime).toLocaleString()}</TableCell>
-
-                        <TableCell>
-                          {session.finished ? (
-                            formatHMS(session.startTime, session.endTime)
-                          ) : (
-                            <Timer startTime={session.startTime} />
-                          )}
-                        </TableCell>
-
-                        <TableCell>
-                          <Typography variant="subtitle2" fontWeight="bold">
-                            الإجمالي: {formatCurrency(cost)}
-                          </Typography>
-                        </TableCell>
-
-                        <TableCell>
-                          {session.finished ? (
-                            <Chip
-                              label="منتهية"
-                              color="success"
-                              icon={<CheckCircle />}
-                              size="small"
-                            />
-                          ) : (
-                            <Chip
-                              label="نشطة"
-                              color="primary"
-                              icon={<Schedule />}
-                              size="small"
-                            />
-                          )}
-                        </TableCell>
-
-                        <TableCell>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            startIcon={<Visibility />}
-                            onClick={() => openSessionReport(session)}
-                          >
-                            عرض
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Box>
-        </Paper>
-      </Container>
-
-      {/* Dialog التقرير */}
-      <Dialog open={openReport} onClose={closeSessionReport} maxWidth="sm" fullWidth dir="rtl">
-        <DialogTitle>
-          تقرير الجلسة
-          <IconButton
-            aria-label="close"
-            onClick={closeSessionReport}
-            sx={{ position: "absolute", right: 8, top: 8 }}
-          >
-            <Close />
-          </IconButton>
-        </DialogTitle>
-
-        <DialogContent dividers>
-          {selectedSession ? (
-            <>
-              <Typography><b>الاسم:</b> {selectedSession.fullName}</Typography>
-              <Typography><b>الهاتف:</b> {selectedSession.phoneNumber}</Typography>
-              <Typography><b>المدينة:</b> {selectedSession.city}</Typography>
-              <Typography><b>الصف:</b> {selectedSession.studyYear}</Typography>
-              <Typography>
-                <b>نوع الجلسة:</b>{" "}
-                {selectedSession.sessionType === "drinks"
-                  ? "مع مشروبات"
-                  : selectedSession.sessionType === "take away"
-                  ? "تيك أواي"
-                  : "بدون مشروبات"}
-              </Typography>
-
-              <Divider sx={{ my: 1 }} />
-
-              <Typography><b>المشروبات / الطلبات:</b></Typography>
-              {selectedSession.orders && selectedSession.orders.length > 0 ? (
-                selectedSession.orders.map((o, i) => (
-                  <Typography key={i} sx={{ ml: 1 }}>
-                    - {getOrderName(o)}{" "}
-                    {getOrderPrice(o) ? `: ${getOrderPrice(o)} ج.م` : ""}
-                  </Typography>
-                ))
-              ) : (
-                <Typography sx={{ ml: 1 }}>—</Typography>
-              )}
-
-              <Divider sx={{ my: 1 }} />
-
-              <Typography><b>البداية:</b> {new Date(selectedSession.startTime).toLocaleString()}</Typography>
-              <Typography><b>النهاية:</b> {selectedSession.endTime ? new Date(selectedSession.endTime).toLocaleString() : "مازالت نشطة"}</Typography>
-
-              {(() => {
-                const { start, end, durationHours, pricePerHour, ordersTotal, cost } =
-                  selectedSession._computed || {};
-                const sessionCost = durationHours * pricePerHour;
-                const total = sessionCost + ordersTotal;
                 return (
-                  <>
-                    <Divider sx={{ my: 1 }} />
-                    <Typography><b>المدة (مقربة):</b> {durationHours} {durationHours === 1 ? "ساعة" : "ساعات"}</Typography>
-                    <Typography><b>سعر الساعة:</b> {formatCurrency(pricePerHour)}</Typography>
-                    <Typography><b>تكلفة الجلسة (ساعات × سعر):</b> {formatCurrency(sessionCost)}</Typography>
-                    <Typography><b>تكلفة الطلبات:</b> {formatCurrency(ordersTotal)}</Typography>
-                    <Typography variant="h6" sx={{ mt: 1 }}>
-                      <b>السعر الكلي:</b> {formatCurrency(total)}
-                    </Typography>
-                  </>
+                  <TableRow key={s.id}>
+                    <TableCell>{s.fullName}</TableCell>
+                    <TableCell>{s.phoneNumber}</TableCell>
+                    <TableCell>{s.city}</TableCell>
+                    <TableCell>{s.studyYear}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={
+                          s.sessionType === "drinks"
+                            ? "مع مشروبات"
+                            : s.sessionType === "take away"
+                            ? "تيك أواي"
+                            : "مذاكرة فقط"
+                        }
+                        color={
+                          s.sessionType === "drinks"
+                            ? "secondary"
+                            : s.sessionType === "take away"
+                            ? "success"
+                            : "default"
+                        }
+                        icon={<LocalCafe />}
+                        size="small"
+                      />
+                    </TableCell>
+                    <TableCell>{renderOrdersInline(s.orders)}</TableCell>
+                    <TableCell>{new Date(s.startTime).toLocaleString()}</TableCell>
+                    <TableCell>
+                      {s.finished ? (
+                        formatHMS(s.startTime, s.endTime)
+                      ) : (
+                        <Timer startTime={s.startTime} />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="subtitle2" fontWeight="bold">
+                        {formatCurrency(cost)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      {s.finished ? (
+                        <Chip label="منتهية" color="success" icon={<CheckCircle />} size="small" />
+                      ) : (
+                        <Chip label="نشطة" color="primary" icon={<Schedule />} size="small" />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Tooltip title="عرض التقرير">
+                        <IconButton onClick={() => openSessionReport(s)}>
+                          <Visibility />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="حذف">
+                        <IconButton color="error" onClick={() => confirmDeleteSession(s)}>
+                          <Delete />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
                 );
-              })()}
-            </>
-          ) : (
-            <Typography>لا توجد بيانات للجلسة.</Typography>
-          )}
-        </DialogContent>
-      </Dialog>
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+
+        {/* 🔹 تقرير الجلسة */}
+        <Dialog open={openReport} onClose={closeSessionReport} fullWidth maxWidth="sm">
+          <DialogTitle>
+            تقرير الجلسة
+            <IconButton onClick={closeSessionReport} sx={{ position: "absolute", left: 8, top: 8 }}>
+              <Close />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent dividers>
+            {selectedSession && (
+              <Box>
+                <Typography>الاسم: {selectedSession.fullName}</Typography>
+                <Typography>الهاتف: {selectedSession.phoneNumber}</Typography>
+                <Typography>المدينة: {selectedSession.city}</Typography>
+                <Typography>الصف: {selectedSession.studyYear}</Typography>
+                <Typography>النوع: {selectedSession.sessionType}</Typography>
+                <Divider sx={{ my: 1 }} />
+                <Typography>الطلبات: {renderOrdersInline(selectedSession.orders)}</Typography>
+                <Typography>
+                  وقت البداية: {new Date(selectedSession._computed.start).toLocaleString()}
+                </Typography>
+                <Typography>
+                  وقت النهاية: {selectedSession.finished ? new Date(selectedSession._computed.end).toLocaleString() : "—"}
+                </Typography>
+                <Typography>المدة: {selectedSession._computed.durationHours} ساعة</Typography>
+                <Typography>سعر الساعة: {formatCurrency(selectedSession._computed.pricePerHour)}</Typography>
+                <Typography>تكلفة الطلبات: {formatCurrency(selectedSession._computed.ordersTotal)}</Typography>
+                <Divider sx={{ my: 1 }} />
+                <Typography variant="h6">إجمالي: {formatCurrency(selectedSession._computed.cost)}</Typography>
+              </Box>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* 🔹 Dialog تأكيد الحذف */}
+        <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+          <DialogTitle>تأكيد الحذف</DialogTitle>
+          <DialogContent>
+            <Typography>هل أنت متأكد من حذف هذه الجلسة؟</Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDeleteDialogOpen(false)}>إلغاء</Button>
+            <Button color="error" onClick={handleDeleteSession}>حذف</Button>
+          </DialogActions>
+        </Dialog>
+      </Container>
     </Box>
   );
 };

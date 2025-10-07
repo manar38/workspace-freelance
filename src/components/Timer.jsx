@@ -10,7 +10,7 @@ const Timer = ({ startTime, finished = false }) => {
     const interval = setInterval(() => {
       const now = new Date();
       const start = new Date(startTime);
-      const diff = now - start;
+      const diff = Math.max(0, now - start);
 
       const hours = Math.floor(diff / (1000 * 60 * 60));
       const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -30,7 +30,7 @@ const Timer = ({ startTime, finished = false }) => {
     if (finished) {
       const start = new Date(startTime);
       const end = new Date();
-      const diff = end - start;
+      const diff = Math.max(0, now - start);
 
       const hours = Math.floor(diff / (1000 * 60 * 60));
       const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
