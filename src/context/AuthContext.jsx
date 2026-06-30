@@ -1,6 +1,11 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+// src/context/AuthContext.js
+import React, { createContext, useState, useContext, useEffect } from 'react';
+import { 
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged
+} from 'firebase/auth';
 import { auth } from '../utils/firebase';
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 
 const AuthContext = createContext();
 
@@ -15,49 +20,66 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setLoading(false);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      console.log('🔐 Auth State Changed:', firebaseUser);
       
-      // Persist user session in localStorage
-      if (user) {
-        localStorage.setItem('user', JSON.stringify({
-          uid: user.uid,
-          email: user.email
-        }));
+      if (firebaseUser) {
+        // التحقق من الإيميل مباشرة
+        const userEmail = firebaseUser.email;
+        let role = 'user'; // القيمة الافتراضية
+        
+        // إذا الإيميل admin@demo.com يبقى admin
+        if (userEmail === 'admin@demo.com') {
+          role = 'admin';
+        }
+        // يمكنك إضافة المزيد من الإيميلات هنا لو عايزة
+        // else if (userEmail === 'manager@demo.com') {
+        //   role = 'manager';
+        // }
+        
+        console.log('📧 User Email:', userEmail);
+        console.log('👑 Assigned Role:', role);
+        
+        setUser({
+          uid: firebaseUser.uid,
+          email: userEmail,
+          role: role
+        });
+        setUserRole(role);
       } else {
-        localStorage.removeItem('user');
+        console.log('🚪 No user logged in');
+        setUser(null);
+        setUserRole(null);
       }
+      setLoading(false);
     });
 
     return unsubscribe;
   }, []);
 
   const login = async (email, password) => {
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-    } catch (error) {
-      throw error;
-    }
+    console.log('🔑 Attempting login for:', email);
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    console.log('✅ Login successful:', userCredential.user.email);
+    return userCredential;
   };
 
   const logout = async () => {
-    try {
-      await signOut(auth);
-      localStorage.removeItem('user');
-    } catch (error) {
-      throw error;
-    }
+    console.log('🚪 Logging out');
+    await signOut(auth);
   };
 
   const isAdmin = () => {
-    return user?.email === 'admin@demo.com';
+    console.log('👑 Checking admin role:', userRole);
+    return userRole === 'admin';
   };
 
   const value = {
     user,
+    userRole,
     login,
     logout,
     isAdmin,
@@ -66,7 +88,7 @@ export const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 };

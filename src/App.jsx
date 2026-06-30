@@ -1,3 +1,4 @@
+// src/App.jsx
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -7,8 +8,10 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
+import DailyReportPage from './pages/DailyReportPage'; // تأكدي من المسار
 
 const theme = createTheme({
+  direction: 'rtl', // مهم جدًا للعربي
   palette: {
     primary: {
       main: '#036d80',
@@ -21,7 +24,17 @@ const theme = createTheme({
     },
   },
   typography: {
-    fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+    fontFamily: '"Tajawal", "Roboto", "Helvetica", "Arial", sans-serif', // خط عربي أجمل
+  },
+  components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        body: {
+          direction: 'rtl',
+          textAlign: 'right',
+        },
+      },
+    },
   },
 });
 
@@ -32,7 +45,13 @@ function App() {
       <AuthProvider>
         <Router>
           <Routes>
+            {/* الصفحة الرئيسية */}
+            <Route path="/" element={<Navigate to="/home" replace />} />
+
+            {/* تسجيل الدخول */}
             <Route path="/login" element={<Login />} />
+
+            {/* الصفحة الرئيسية (للمستخدمين العاديين) */}
             <Route
               path="/home"
               element={
@@ -41,16 +60,29 @@ function App() {
                 </ProtectedRoute>
               }
             />
+
+            {/* لوحة التحكم (للمشرفين فقط) */}
             <Route
               path="/dashboard"
               element={
-                <ProtectedRoute adminOnly={true}>
+                <ProtectedRoute adminOnly>
                   <Dashboard />
                 </ProtectedRoute>
               }
             />
-            <Route path="/" element={<Navigate to="/login" replace />} />
-            <Route path="*" element={<Navigate to="/login" replace />} />
+
+            {/* تقرير يومي (للمشرفين فقط) */}
+            <Route
+              path="/report/:date"
+              element={
+                <ProtectedRoute adminOnly>
+                  <DailyReportPage />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* صفحة 404 */}
+            <Route path="*" element={<Navigate to="/home" replace />} />
           </Routes>
         </Router>
       </AuthProvider>

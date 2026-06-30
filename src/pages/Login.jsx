@@ -9,8 +9,8 @@ import {
   Alert,
   CircularProgress
 } from '@mui/material';
-import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext.jsx';
+import { useNavigate, useLocation } from 'react-router-dom';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -19,25 +19,35 @@ const Login = () => {
   const [error, setError] = useState('');
   const { login, user, isAdmin } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  useEffect(() => {
-    if (user) {
-      if (isAdmin()) {
-        navigate('/dashboard', { replace: true });
-      } else {
-        navigate('/home', { replace: true });
-      }
-    }
-  }, [user, isAdmin, navigate]);
+  const from = location.state?.from?.pathname || '/';
+
+useEffect(() => {
+  if (user) {
+    console.log('🔄 Redirecting user:', user.email, 'Role:', user.role);
+    const redirectPath = isAdmin() ? '/dashboard' : '/home';
+    console.log('🎯 Redirecting to:', redirectPath);
+    navigate(redirectPath, { replace: true });
+  }
+}, [user, isAdmin, navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    if (!email || !password) {
+      setError('يرجى ملء جميع الحقول');
+      return;
+    }
+
     setLoading(true);
     setError('');
 
     try {
       await login(email, password);
+      // الانتقال سيتم تلقائياً عبر useEffect
     } catch (error) {
+      console.error('Login error:', error);
       setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
     } finally {
       setLoading(false);
@@ -52,12 +62,14 @@ const Login = () => {
           flexDirection: 'column',
           alignItems: 'center',
           minHeight: '100vh',
-          justifyContent: 'center'
+          justifyContent: 'center',
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          padding: 2
         }}
       >
-        <Paper elevation={3} sx={{ padding: 4, width: '100%' }}>
-          <Typography variant="h4" component="h1" gutterBottom align="center">
-            نظام تسجيل دخول المكتب
+        <Paper elevation={8} sx={{ padding: 4, width: '100%', maxWidth: 400 }}>
+          <Typography variant="h4" component="h1" gutterBottom align="center" color="primary">
+            نظام إدارة المكتب
           </Typography>
           <Typography variant="h6" gutterBottom align="center" color="text.secondary">
             تسجيل الدخول
@@ -81,6 +93,7 @@ const Login = () => {
               autoFocus
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              disabled={loading}
             />
             <TextField
               margin="normal"
@@ -93,13 +106,15 @@ const Login = () => {
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              disabled={loading}
             />
             <Button
               type="submit"
               fullWidth
               variant="contained"
               disabled={loading}
-              sx={{ mt: 3, mb: 2 }}
+              sx={{ mt: 3, mb: 2, py: 1.5 }}
+              size="large"
             >
               {loading ? <CircularProgress size={24} /> : 'تسجيل الدخول'}
             </Button>
