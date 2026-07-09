@@ -11,7 +11,7 @@ const PricingSection = ({ basicPrice, drinksPrice, onBasicPriceChange, onDrinksP
             type="number"
             fullWidth
             value={basicPrice}
-            onChange={onBasicPriceChange}
+            onChange={(e) => onBasicPriceChange(e.target.value)}
           />
         </Grid>
         <Grid item xs={12} sm={4}>
@@ -20,7 +20,7 @@ const PricingSection = ({ basicPrice, drinksPrice, onBasicPriceChange, onDrinksP
             type="number"
             fullWidth
             value={drinksPrice}
-            onChange={onDrinksPriceChange}
+            onChange={(e) => onDrinksPriceChange(e.target.value)}
           />
         </Grid>
         <Grid item xs={12} sm={4}>
